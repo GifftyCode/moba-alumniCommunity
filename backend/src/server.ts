@@ -1,9 +1,8 @@
-import express, { Application, Request, Response } from "express";
+import express, { Application, Request, Response, NextFunction } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import mongoSanitize from "express-mongo-sanitize";
 import hpp from "hpp";
 import connectDB from "./config/db";
 import authRoutes from "./routes/authRoutes";
@@ -19,9 +18,10 @@ const app: Application = express();
 // ── Security Headers ──────────────────────────────────────────
 app.use(helmet());
 
-// ── CORS — only allow your frontend ──────────────────────────
+// ── CORS ──────────────────────────────────────────────────────
 const allowedOrigins = [
   "http://localhost:3000",
+  "http://localhost:4000",
   process.env.FRONTEND_URL as string,
 ].filter(Boolean);
 
@@ -39,18 +39,31 @@ app.use(
 );
 
 // ── Body Parsers ──────────────────────────────────────────────
-app.use(express.json({ limit: "10kb" })); // Block oversized payloads
+app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 
-// ── Sanitize inputs (prevent NoSQL injection) ─────────────────
-app.use(mongoSanitize());
+// ── Custom NoSQL Injection Sanitizer ─────────────────────────
+const sanitizeInput = (obj: Record<string, unknown>): void => {
+  for (const key in obj) {
+    if (key.startsWith("$") || key.includes(".")) {
+      delete obj[key];
+    } else if (typeof obj[key] === "object" && obj[key] !== null) {
+      sanitizeInput(obj[key] as Record<string, unknown>);
+    }
+  }
+};
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  if (req.body) sanitizeInput(req.body as Record<string, unknown>);
+  next();
+});
 
 // ── Prevent HTTP param pollution ──────────────────────────────
 app.use(hpp());
 
 // ── Global Rate Limiter ───────────────────────────────────────
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100,
   message: {
     success: false,
@@ -61,10 +74,10 @@ const globalLimiter = rateLimit({
 });
 app.use("/api", globalLimiter);
 
-// ── Strict Rate Limiter for Auth routes ───────────────────────
+// ── Auth Rate Limiter ─────────────────────────────────────────
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10, // Only 10 login/register attempts per 15 mins
+  max: 10,
   message: {
     success: false,
     message: "Too many attempts, please try again in 15 minutes.",
@@ -91,7 +104,7 @@ app.use((_req: Request, res: Response) => {
   res.status(404).json({ success: false, message: "Route not found" });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
